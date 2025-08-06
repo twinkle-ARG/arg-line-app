@@ -1,22 +1,35 @@
 // api/webhook.js
 
 export default async function handler(req, res) {
-  if (req.method === 'GET') {
-    res.status(200).send('Webhook GET OK');
-    return;
-  }
-
   if (req.method === 'POST') {
-    try {
-      // 本来は req.body.events を使うが、まず動作確認のため固定レスポンス
-      console.log('Received POST', req.body);
+    const body = req.body;
 
-      // 実際のLINE Bot処理を書く前に200を返す
-      res.status(200).json({ status: 'received' });
-    } catch (error) {
-      console.error('Error in webhook:', error);
-      res.status(500).json({ error: 'Internal Server Error' });
+    // イベントが存在するかチェック
+    if (body.events && body.events.length > 0) {
+      const event = body.events[0];
+
+      // 返信トークンがあれば返信する
+      const replyToken = event.replyToken;
+
+      await fetch('https://api.line.me/v2/bot/message/reply', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`
+        },
+        body: JSON.stringify({
+          replyToken: replyToken,
+          messages: [
+            {
+              type: 'text',
+              text: 'こんにちは！'
+            }
+          ]
+        })
+      });
     }
+
+    res.status(200).end();
   } else {
     res.status(405).send('Method Not Allowed');
   }
