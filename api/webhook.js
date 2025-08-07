@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     if (event.type === 'message' && event.message.type === 'text') {
       const msg = event.message.text.trim().toLowerCase();
 
-      // ユーザー名の取得（宛名用）
+      // ユーザー名取得
       let name = '協力者様';
       try {
         const profile = await client.getProfile(event.source.userId);
@@ -23,7 +23,7 @@ export default async function handler(req, res) {
         console.error('プロファイル取得失敗:', err);
       }
 
-      // ▼ スタート → 調査依頼メッセージ
+      // ▼ スタート
       if (msg === 'スタート') {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -49,7 +49,7 @@ ${name} 様
         return;
       }
 
-      // ▼ 同意 → 初回記録の送信
+      // ▼ 同意
       if (msg.includes('同意')) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -74,7 +74,7 @@ ${name} 様
         return;
       }
 
-      // ▼ 名前検索：石田 祐樹
+      // ▼ プロフィール検索：石田祐樹
       if (msg.includes('石田') || msg.includes('祐樹')) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -91,7 +91,7 @@ ${name} 様
         return;
       }
 
-      // ▼ 名前検索：坂本 結衣
+      // ▼ プロフィール検索：坂本結衣
       if (msg.includes('坂本') || msg.includes('結衣')) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -108,7 +108,7 @@ ${name} 様
         return;
       }
 
-      // ▼ 名前検索：武田 晴美
+      // ▼ プロフィール検索：武田晴美
       if (msg.includes('武田') || msg.includes('晴美')) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -119,8 +119,43 @@ ${name} 様
 特記事項：  
 ・「夜中2時にだけ、廊下の光が右奥からしか届かない」と複数回申告  
 ・302号室のドアが「内側から何かに押されている感じがする」と独自報告（未確認）  
+・廊下奥の壁に「鳴き声のようなものが響く」と書かれた手紙を拾得したと報告（2023/12/3）  
+　※これに関しては【KBN-305-F01】に整理済み
 
 ※最終更新：2023年10月5日（担当者手動補記）`,
+        });
+        return;
+      }
+
+      // ▼ 拾得物記録：KBN-305-F01
+      if (msg.includes('kbn-305-f01')) {
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `【拾得物記録：KBN-305-F01】
+
+対象住人：武田 晴美（305号室）  
+記録日：2023年12月3日  
+種別：拾得物報告
+
+──────────────
+
+武田氏による報告：  
+廊下奥の壁付近で封筒を拾得。  
+封筒には差出人・宛名の記載なし。  
+中には鉛筆で走り書きされた手紙が一枚。  
+以下の文言が含まれていた：
+
+　「だれかが、ならしてる」  
+　「きこえてるのは わたしだけ？」
+
+手紙原本は未提出。  
+内容はすべて武田氏の口頭による申告。
+
+──────────────
+
+備考：  
+当該内容は他の証言と併せて調査継続中。  
+現時点では証拠資料としての効力は保留。`,
         });
         return;
       }
@@ -128,7 +163,7 @@ ${name} 様
       // ▼ 該当しないメッセージ
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: `記録が見つかりません。対象住人の氏名をご確認ください。`,
+        text: `記録が見つかりません。対象住人の氏名や記録番号をご確認ください。`,
       });
     }
   }));
