@@ -24,7 +24,7 @@ export default async function handler(req, res) {
       }
 
       // ▼ 「スタート」→ 調査依頼メッセージ（名前入り）
-      if (msg === 'スタート') {
+      if (msg === '調査開始') {
         await client.replyMessage(event.replyToken, {
           type: 'text',
           text: `【空白社よりご案内】
@@ -78,3 +78,4 @@ ${name} 様
 
   res.status(200).end();
 }
+
