@@ -14,7 +14,7 @@ export default async function handler(req, res) {
     if (event.type === 'message' && event.message.type === 'text') {
       const msg = event.message.text.trim().toLowerCase();
 
-      // ユーザーのプロフィールを取得（表示名を宛名に使用）
+      // ユーザーの表示名取得（宛名用）
       let name = '協力者様';
       try {
         const profile = await client.getProfile(event.source.userId);
@@ -23,8 +23,8 @@ export default async function handler(req, res) {
         console.error('プロファイル取得失敗:', err);
       }
 
-      // ▼ 「スタート」→ 調査依頼メッセージ（名前入り）
-      if (msg === '調査開始') {
+      // ▼ 「スタート」→ 空白社からの調査依頼
+      if (msg === 'スタート') {
         await client.replyMessage(event.replyToken, {
           type: 'text',
           text: `【空白社よりご案内】
@@ -49,7 +49,7 @@ ${name} 様
         return;
       }
 
-      // ▼ 「同意」含む → 初回記録送信（名前入り）
+      // ▼ 「同意」→ 初回記録の送信
       if (msg.includes('同意')) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
@@ -58,17 +58,23 @@ ${name} 様
 ご返信ありがとうございます。
 本調査へのご協力を確認いたしました。
 
-初回記録を送信いたします。
+以下は対象物件における居住者リスト（抜粋）です。  
+一部記録に不整合が確認されています。
 
-▶ ファイル：住民記録（第1号）  
-▶ 状況：一部欠番あり
+──────────────  
+■ 302号室｜石田 祐樹｜1984年生｜会社員  
+■ 303号室｜坂本 結衣｜1992年生｜学生  
+■ 　  　   ｜名前不明｜記録欠損｜分類不明  
+■ 305号室｜武田 晴美｜1975年生｜無職  
+──────────────
 
-以後、順次記録を共有いたします。`,
+対象行について、調査を進行中です。  
+必要に応じて詳細な閲覧権限を解放します。`,
         });
         return;
       }
 
-      // ▼ それ以外 → デバッグ返信（今後削除可）
+      // ▼ その他（今後の発展用：不明ワード）
       await client.replyMessage(event.replyToken, {
         type: 'text',
         text: `受信メッセージ: ${event.message.text}`,
@@ -78,4 +84,3 @@ ${name} 様
 
   res.status(200).end();
 }
-
