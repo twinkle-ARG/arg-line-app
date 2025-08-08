@@ -1,9 +1,73 @@
+// /api/webhook.js
 import { Client } from '@line/bot-sdk';
 
 export default async function handler(req, res) {
   const client = new Client({
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   });
+
+  // --- ここから追記：KBNコード用ユーティリティとルート定義 ---
+  const z2hMap = (() => {
+    const map = {};
+    for (let i = 0; i < 10; i++) map[String.fromCharCode(0xFF10 + i)] = String(i); // ０-９
+    for (let i = 0; i < 26; i++) {
+      map[String.fromCharCode(0xFF21 + i)] = String.fromCharCode(0x41 + i); // Ａ-Ｚ
+      map[String.fromCharCode(0xFF41 + i)] = String.fromCharCode(0x61 + i); // ａ-ｚ
+    }
+    // 全角/異体ハイフン→半角ハイフン
+    ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u30FC', '\uFF0D'].forEach(ch => {
+      map[ch] = '-';
+    });
+    return map;
+  })();
+
+  function normalizeKbnInput(input) {
+    const raw = (input || '').trim();
+    const z2h = raw.split('').map(ch => z2hMap[ch] ?? ch).join('');
+    const lowered = z2h.toLowerCase().replace(/\s+/g, '');
+    const keyOnly = lowered.replace(/[^a-z0-9-]/g, ''); // 英数・ハイフンのみ
+    const noHyphen = keyOnly.replace(/-/g, '');
+    return { keyOnly, noHyphen };
+  }
+
+  // KBN 記録ルーティング（必要に応じてここに追記）
+  const recordRoutes = {
+    'kbn-302-f01': {
+      title: '【対応記録 KBN-302-F01】',
+      body: [
+        '部屋: 302（欠番隣接）',
+        '住人: 楠見 透',
+        '通報内容: 「階段の段数が日によって変わる」／深夜帯の足音が断続的に増減。',
+        '補足: 階段踊り場の監視映像に“段抜け”フレーム（1/30秒欠落）が散見。',
+        '対応: 管理員 巡回（02:10-02:35）→ 段数の再測定で不一致（23段→22段）を記録。',
+        '次手順: 継続観測（02-04時）。担当: 記録保全課。',
+      ].join('\n'),
+      hint: '続きは「KBN-302-F02」を入力してください。'
+    },
+    'kbn302f01': 'kbn-302-f01', // エイリアス（ハイフン無し）
+
+    'kbn-303-f01': {
+      title: '【対応記録 KBN-303-F01】',
+      body: [
+        '部屋: 303',
+        '住人: 藤井 沙耶',
+        '通報内容: 室内通話中、廊下方向から“足音”が近づくが、覗き穴には誰も映らない。',
+        '補足: エレベータ表示が一時的に「3」が欠落（2→—→4）する現象を同時刻に確認。',
+        '対応: 廊下騒音ログの回収。通話アプリのタイムスタンプと同期済。',
+        '次手順: 足音波形の比較（F01-廊下 vs F01-室内）。',
+      ].join('\n'),
+      hint: '続きは「KBN-303-F02」を入力してください。'
+    },
+    'kbn303f01': 'kbn-303-f01',
+  };
+
+  function resolveRecord(key) {
+    const v = recordRoutes[key];
+    if (!v) return null;
+    if (typeof v === 'string') return recordRoutes[v] ?? null;
+    return v;
+  }
+  // --- 追記ここまで ---
 
   const events = req.body.events;
   if (!Array.isArray(events)) {
@@ -12,7 +76,7 @@ export default async function handler(req, res) {
 
   await Promise.all(events.map(async (event) => {
     if (event.type === 'message' && event.message.type === 'text') {
-      const msg = event.message.text.trim().toLowerCase();
+      const msg = (event.message.text || '').trim().toLowerCase();
 
       // ユーザー名取得
       let name = '協力者様';
@@ -22,6 +86,38 @@ export default async function handler(req, res) {
       } catch (err) {
         console.error('プロファイル取得失敗:', err);
       }
+
+      // === ここから最優先：KBNコード判定（名前分岐より前） ===
+      const { keyOnly, noHyphen } = normalizeKbnInput(event.message.text);
+      const record = resolveRecord(keyOnly) || resolveRecord(noHyphen);
+      if (record) {
+        await client.replyMessage(event.replyToken, [
+          { type: 'text', text: record.title },
+          { type: 'text', text: record.body },
+          { type: 'text', text: record.hint, quickReply: {
+              items: [
+                { type: 'action', action: { type: 'message', label: '記録一覧', text: '記録一覧' } }
+              ]
+            }
+          }
+        ]);
+        return;
+      }
+
+      // 記録一覧コマンド
+      if (['記録一覧', 'list', 'records'].includes(msg)) {
+        const list = Object.keys(recordRoutes)
+          .filter(k => k.includes('-')) // 正規キーのみ表示
+          .sort()
+          .map(k => `・${k}`)
+          .join('\n');
+        await client.replyMessage(event.replyToken, {
+          type: 'text',
+          text: `参照可能な記録コード:\n${list}\n\n※ ハイフン無しでも入力可（例: kbn302f01）`
+        });
+        return;
+      }
+      // === KBN優先ルート ここまで ===
 
       // ▼ スタート
       if (msg === 'スタート') {
@@ -127,7 +223,7 @@ ${name} 様
         return;
       }
 
-      // ▼ 拾得物記録：KBN-305-F01
+      // ▼ 拾得物記録：KBN-305-F01（既存の個別分岐は残す）
       if (msg.includes('kbn-305-f01')) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
