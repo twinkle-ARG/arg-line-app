@@ -6,7 +6,7 @@ export default async function handler(req, res) {
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   });
 
-  // ===== 正規化（全角→半角 ほか） =====
+  // === キーワード正規化（全角→半角、記号整理） ===
   const z2hMap = (() => {
     const map = {};
     for (let i = 0; i < 10; i++) map[String.fromCharCode(0xFF10 + i)] = String(i); // ０-９
@@ -14,7 +14,7 @@ export default async function handler(req, res) {
       map[String.fromCharCode(0xFF21 + i)] = String.fromCharCode(0x41 + i); // Ａ-Ｚ
       map[String.fromCharCode(0xFF41 + i)] = String.fromCharCode(0x61 + i); // ａ-ｚ
     }
-    // 全角・異体ハイフン → 半角ハイフン
+    // 全角/異体ハイフンを半角に
     ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u30FC', '\uFF0D'].forEach(ch => {
       map[ch] = '-';
     });
@@ -30,14 +30,7 @@ export default async function handler(req, res) {
     return { keyOnly, noHyphen };
   }
 
-  // KBNコード抽出（テキストから1件拾う）
-  function extractKbnCode(text) {
-    if (!text) return null;
-    const m = (text.match(/kbn-[0-9]{3}-f[0-9]{2}/i) || [])[0];
-    return m ? m.toUpperCase() : null;
-  }
-
-  // ===== 記録ルート =====
+  // === 記録ルーティング（KBNコード） ===
   const recordRoutes = {
     'kbn-302-f01': {
       title: '【対応記録 KBN-302-F01】',
@@ -51,7 +44,7 @@ export default async function handler(req, res) {
       ].join('\n'),
       hint: '続きは「KBN-302-F02」を入力してください。'
     },
-    'kbn302f01': 'kbn-302-f01',
+    'kbn302f01': 'kbn-302-f01', // ハイフン無しも許容
 
     'kbn-303-f01': {
       title: '【対応記録 KBN-303-F01】',
@@ -75,30 +68,6 @@ export default async function handler(req, res) {
     return v;
   }
 
-  // ===== ブックマーク（メモリ保存） =====
-  // userId -> Array<string>（KBNコード、最大10件、新しい順・重複なし）
-  const userBookmarks = global.__KBN_BOOKMARKS__ || new Map();
-  global.__KBN_BOOKMARKS__ = userBookmarks; // dev/hot-reload対策
-
-  function addBookmark(userId, code) {
-    if (!code) return;
-    const cur = userBookmarks.get(userId) || [];
-    const up = [code, ...cur.filter(c => c !== code)].slice(0, 10);
-    userBookmarks.set(userId, up);
-  }
-  function listBookmarks(userId) {
-    return userBookmarks.get(userId) || [];
-  }
-  function removeBookmark(userId, code) {
-    if (!code) return;
-    const cur = userBookmarks.get(userId) || [];
-    userBookmarks.set(userId, cur.filter(c => c !== code));
-  }
-  function clearBookmarks(userId) {
-    userBookmarks.delete(userId);
-  }
-
-  // ===== 受信処理 =====
   const events = req.body.events;
   if (!Array.isArray(events)) {
     return res.status(500).end();
@@ -110,7 +79,7 @@ export default async function handler(req, res) {
     const rawText = event.message.text || '';
     const msg = rawText.trim().toLowerCase();
 
-    // ユーザー名
+    // ユーザー名（必要なら文面に使用）
     let name = '協力者様';
     try {
       const profile = await client.getProfile(event.source.userId);
@@ -119,94 +88,19 @@ export default async function handler(req, res) {
       console.error('プロファイル取得失敗:', err);
     }
 
-    // === 最優先：KBNコードでの記録表示 ===
+    // === 最優先：KBNコードでの記録表示（キーワード入力のみ） ===
     const { keyOnly, noHyphen } = normalizeKbnInput(rawText);
     const record = resolveRecord(keyOnly) || resolveRecord(noHyphen);
     if (record) {
-      // 次候補（hintの中のコードを抽出）
-      const nextCode = extractKbnCode(record.hint);
-
       await client.replyMessage(event.replyToken, [
         { type: 'text', text: record.title },
         { type: 'text', text: record.body },
-        {
-          type: 'text',
-          text: record.hint || '続きがあります。',
-          quickReply: {
-            items: [
-              ...(nextCode ? [{
-                type: 'action',
-                action: { type: 'message', label: '▶ 続きを入力', text: nextCode }
-              }] : []),
-              {
-                type: 'action',
-                action: { type: 'message', label: '★保存', text: `ブックマーク追加 ${extractKbnCode(record.title) || nextCode || ''}`.trim() }
-              },
-              {
-                type: 'action',
-                action: { type: 'message', label: 'ブックマーク一覧', text: 'ブックマーク' }
-              }
-            ]
-          }
-        }
+        { type: 'text', text: record.hint }
       ]);
       return;
     }
 
-    // === ブックマーク系コマンド ===
-    // 一覧
-    if (msg === 'ブックマーク' || msg === 'bookmarks' || msg === 'bm') {
-      const list = listBookmarks(event.source.userId);
-      if (!list.length) {
-        await client.replyMessage(event.replyToken, { type: 'text', text: 'ブックマークはまだありません。' });
-        return;
-      }
-      await client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `ブックマーク（最大10件）：\n${list.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n\nタップで再送できます。削除は「ブックマーク削除 KBN-xxx-FOO」。`,
-        quickReply: {
-          items: list.map(c => ({
-            type: 'action',
-            action: { type: 'message', label: c, text: c }
-          }))
-        }
-      });
-      return;
-    }
-
-    // 追加
-    if (msg.startsWith('ブックマーク追加')) {
-      const code = extractKbnCode(rawText);
-      if (!code) {
-        await client.replyMessage(event.replyToken, { type: 'text', text: '追加するKBNコードが見つかりません。例：「ブックマーク追加 KBN-302-F01」' });
-        return;
-      }
-      addBookmark(event.source.userId, code.toUpperCase());
-      await client.replyMessage(event.replyToken, { type: 'text', text: `ブックマークに追加しました：${code.toUpperCase()}` });
-      return;
-    }
-
-    // 削除
-    if (msg.startsWith('ブックマーク削除')) {
-      const code = extractKbnCode(rawText);
-      if (!code) {
-        await client.replyMessage(event.replyToken, { type: 'text', text: '削除するKBNコードが見つかりません。例：「ブックマーク削除 KBN-302-F01」' });
-        return;
-      }
-      removeBookmark(event.source.userId, code.toUpperCase());
-      await client.replyMessage(event.replyToken, { type: 'text', text: `ブックマークから削除しました：${code.toUpperCase()}` });
-      return;
-    }
-
-    // 全削除
-    if (msg === 'ブックマーク全削除' || msg === 'bookmarks clear') {
-      clearBookmarks(event.source.userId);
-      await client.replyMessage(event.replyToken, { type: 'text', text: 'ブックマークを全て削除しました。' });
-      return;
-    }
-
-    // === 通常分岐 ===
-    // ▼ スタート
+    // === 物語導入（任意で残す） ===
     if (msg === 'スタート') {
       await client.replyMessage(event.replyToken, {
         type: 'text',
@@ -225,14 +119,11 @@ ${name} 様
 ――――――――――――  
 
 当該調査に協力を希望される方は、  
-このトークに【同意します】と返信してください。
-
-※本調査は空白社が独自に実施するものであり、対象物件の管理者・関係機関との直接的関係はありません。`,
+このトークに【同意します】と返信してください。`,
       });
       return;
     }
 
-    // ▼ 同意
     if (msg.includes('同意')) {
       await client.replyMessage(event.replyToken, {
         type: 'text',
@@ -251,13 +142,12 @@ ${name} 様
 ■ 305号室｜武田 晴美｜1975年生｜無職  
 ──────────────
 
-対象行について、調査を進行中です。  
-必要に応じて詳細な閲覧権限を解放します。`,
+キーワード（例：KBN-302-F01 / KBN-303-F01）を入力して進めてください。`,
       });
       return;
     }
 
-    // ▼ プロフィール検索：石田祐樹
+    // === プロフィール（氏名キーワード） ===
     if (msg.includes('石田') || msg.includes('祐樹')) {
       await client.replyMessage(event.replyToken, {
         type: 'text',
@@ -274,7 +164,6 @@ ${name} 様
       return;
     }
 
-    // ▼ プロフィール検索：坂本結衣
     if (msg.includes('坂本') || msg.includes('結衣')) {
       await client.replyMessage(event.replyToken, {
         type: 'text',
@@ -291,7 +180,6 @@ ${name} 様
       return;
     }
 
-    // ▼ プロフィール検索：武田晴美
     if (msg.includes('武田') || msg.includes('晴美')) {
       await client.replyMessage(event.replyToken, {
         type: 'text',
@@ -310,7 +198,7 @@ ${name} 様
       return;
     }
 
-    // ▼ 拾得物記録：KBN-305-F01（個別分岐）
+    // 既存の個別記録（拾得物など）
     if (msg.includes('kbn-305-f01')) {
       await client.replyMessage(event.replyToken, {
         type: 'text',
@@ -343,10 +231,10 @@ ${name} 様
       return;
     }
 
-    // ▼ デフォルト
+    // デフォルト
     await client.replyMessage(event.replyToken, {
       type: 'text',
-      text: `記録が見つかりません。対象住人の氏名や記録番号をご確認ください。`,
+      text: `記録が見つかりません。対象住人の氏名や「KBN-xxx-Fyy」を入力してください。`,
     });
   }));
 
