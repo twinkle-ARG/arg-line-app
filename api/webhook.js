@@ -6,7 +6,7 @@ export default async function handler(req, res) {
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   });
 
-  // --- ここから追記：KBNコード用ユーティリティとルート定義 ---
+  // ===== 正規化（全角→半角 ほか） =====
   const z2hMap = (() => {
     const map = {};
     for (let i = 0; i < 10; i++) map[String.fromCharCode(0xFF10 + i)] = String(i); // ０-９
@@ -14,7 +14,7 @@ export default async function handler(req, res) {
       map[String.fromCharCode(0xFF21 + i)] = String.fromCharCode(0x41 + i); // Ａ-Ｚ
       map[String.fromCharCode(0xFF41 + i)] = String.fromCharCode(0x61 + i); // ａ-ｚ
     }
-    // 全角/異体ハイフン→半角ハイフン
+    // 全角・異体ハイフン → 半角ハイフン
     ['\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212', '\u30FC', '\uFF0D'].forEach(ch => {
       map[ch] = '-';
     });
@@ -30,31 +30,38 @@ export default async function handler(req, res) {
     return { keyOnly, noHyphen };
   }
 
-  // KBN 記録ルーティング（必要に応じてここに追記）
+  // KBNコード抽出（テキストから1件拾う）
+  function extractKbnCode(text) {
+    if (!text) return null;
+    const m = (text.match(/kbn-[0-9]{3}-f[0-9]{2}/i) || [])[0];
+    return m ? m.toUpperCase() : null;
+  }
+
+  // ===== 記録ルート =====
   const recordRoutes = {
     'kbn-302-f01': {
       title: '【対応記録 KBN-302-F01】',
       body: [
-        '部屋: 302（欠番隣接）',
-        '住人: 楠見 透',
-        '通報内容: 「階段の段数が日によって変わる」／深夜帯の足音が断続的に増減。',
-        '補足: 階段踊り場の監視映像に“段抜け”フレーム（1/30秒欠落）が散見。',
-        '対応: 管理員 巡回（02:10-02:35）→ 段数の再測定で不一致（23段→22段）を記録。',
-        '次手順: 継続観測（02-04時）。担当: 記録保全課。',
+        '部屋: 302',
+        '住人: 石田 祐樹',
+        '通報内容: 深夜の階段で「踏んでいないのに音が鳴る段」があるとの申告（2023/11/08）。',
+        '補足: 該当時間帯の監視カメラ映像で、1段目を踏む前に“音”の波形が検出されている。',
+        '対応: 廊下および階段の振動計測を実施（02:15〜02:40）。通常値より上振れ有り。',
+        '次手順: 階段全段の個別センサー設置を検討中。',
       ].join('\n'),
       hint: '続きは「KBN-302-F02」を入力してください。'
     },
-    'kbn302f01': 'kbn-302-f01', // エイリアス（ハイフン無し）
+    'kbn302f01': 'kbn-302-f01',
 
     'kbn-303-f01': {
       title: '【対応記録 KBN-303-F01】',
       body: [
         '部屋: 303',
-        '住人: 藤井 沙耶',
-        '通報内容: 室内通話中、廊下方向から“足音”が近づくが、覗き穴には誰も映らない。',
-        '補足: エレベータ表示が一時的に「3」が欠落（2→—→4）する現象を同時刻に確認。',
-        '対応: 廊下騒音ログの回収。通話アプリのタイムスタンプと同期済。',
-        '次手順: 足音波形の比較（F01-廊下 vs F01-室内）。',
+        '住人: 坂本 結衣',
+        '通報内容: 階段の段数が日によって変わる旨の本人申告（2024/1/19）。',
+        '補足: 報告当日の朝と夜で段数計測を実施。朝は23段、夜は22段を確認。',
+        '対応: 記録員立会いのもと再測定を予定。時間帯別の変化要因を調査中。',
+        '次手順: 夜間（01〜03時）の連続監視カメラを設置予定。',
       ].join('\n'),
       hint: '続きは「KBN-303-F02」を入力してください。'
     },
@@ -67,63 +74,143 @@ export default async function handler(req, res) {
     if (typeof v === 'string') return recordRoutes[v] ?? null;
     return v;
   }
-  // --- 追記ここまで ---
 
+  // ===== ブックマーク（メモリ保存） =====
+  // userId -> Array<string>（KBNコード、最大10件、新しい順・重複なし）
+  const userBookmarks = global.__KBN_BOOKMARKS__ || new Map();
+  global.__KBN_BOOKMARKS__ = userBookmarks; // dev/hot-reload対策
+
+  function addBookmark(userId, code) {
+    if (!code) return;
+    const cur = userBookmarks.get(userId) || [];
+    const up = [code, ...cur.filter(c => c !== code)].slice(0, 10);
+    userBookmarks.set(userId, up);
+  }
+  function listBookmarks(userId) {
+    return userBookmarks.get(userId) || [];
+  }
+  function removeBookmark(userId, code) {
+    if (!code) return;
+    const cur = userBookmarks.get(userId) || [];
+    userBookmarks.set(userId, cur.filter(c => c !== code));
+  }
+  function clearBookmarks(userId) {
+    userBookmarks.delete(userId);
+  }
+
+  // ===== 受信処理 =====
   const events = req.body.events;
   if (!Array.isArray(events)) {
     return res.status(500).end();
   }
 
   await Promise.all(events.map(async (event) => {
-    if (event.type === 'message' && event.message.type === 'text') {
-      const msg = (event.message.text || '').trim().toLowerCase();
+    if (event.type !== 'message' || event.message.type !== 'text') return;
 
-      // ユーザー名取得
-      let name = '協力者様';
-      try {
-        const profile = await client.getProfile(event.source.userId);
-        name = profile.displayName || name;
-      } catch (err) {
-        console.error('プロファイル取得失敗:', err);
-      }
+    const rawText = event.message.text || '';
+    const msg = rawText.trim().toLowerCase();
 
-      // === ここから最優先：KBNコード判定（名前分岐より前） ===
-      const { keyOnly, noHyphen } = normalizeKbnInput(event.message.text);
-      const record = resolveRecord(keyOnly) || resolveRecord(noHyphen);
-      if (record) {
-        await client.replyMessage(event.replyToken, [
-          { type: 'text', text: record.title },
-          { type: 'text', text: record.body },
-          { type: 'text', text: record.hint, quickReply: {
-              items: [
-                { type: 'action', action: { type: 'message', label: '記録一覧', text: '記録一覧' } }
-              ]
-            }
+    // ユーザー名
+    let name = '協力者様';
+    try {
+      const profile = await client.getProfile(event.source.userId);
+      name = profile.displayName || name;
+    } catch (err) {
+      console.error('プロファイル取得失敗:', err);
+    }
+
+    // === 最優先：KBNコードでの記録表示 ===
+    const { keyOnly, noHyphen } = normalizeKbnInput(rawText);
+    const record = resolveRecord(keyOnly) || resolveRecord(noHyphen);
+    if (record) {
+      // 次候補（hintの中のコードを抽出）
+      const nextCode = extractKbnCode(record.hint);
+
+      await client.replyMessage(event.replyToken, [
+        { type: 'text', text: record.title },
+        { type: 'text', text: record.body },
+        {
+          type: 'text',
+          text: record.hint || '続きがあります。',
+          quickReply: {
+            items: [
+              ...(nextCode ? [{
+                type: 'action',
+                action: { type: 'message', label: '▶ 続きを入力', text: nextCode }
+              }] : []),
+              {
+                type: 'action',
+                action: { type: 'message', label: '★保存', text: `ブックマーク追加 ${extractKbnCode(record.title) || nextCode || ''}`.trim() }
+              },
+              {
+                type: 'action',
+                action: { type: 'message', label: 'ブックマーク一覧', text: 'ブックマーク' }
+              }
+            ]
           }
-        ]);
+        }
+      ]);
+      return;
+    }
+
+    // === ブックマーク系コマンド ===
+    // 一覧
+    if (msg === 'ブックマーク' || msg === 'bookmarks' || msg === 'bm') {
+      const list = listBookmarks(event.source.userId);
+      if (!list.length) {
+        await client.replyMessage(event.replyToken, { type: 'text', text: 'ブックマークはまだありません。' });
         return;
       }
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `ブックマーク（最大10件）：\n${list.map((c, i) => `${i + 1}. ${c}`).join('\n')}\n\nタップで再送できます。削除は「ブックマーク削除 KBN-xxx-FOO」。`,
+        quickReply: {
+          items: list.map(c => ({
+            type: 'action',
+            action: { type: 'message', label: c, text: c }
+          }))
+        }
+      });
+      return;
+    }
 
-      // 記録一覧コマンド
-      if (['記録一覧', 'list', 'records'].includes(msg)) {
-        const list = Object.keys(recordRoutes)
-          .filter(k => k.includes('-')) // 正規キーのみ表示
-          .sort()
-          .map(k => `・${k}`)
-          .join('\n');
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `参照可能な記録コード:\n${list}\n\n※ ハイフン無しでも入力可（例: kbn302f01）`
-        });
+    // 追加
+    if (msg.startsWith('ブックマーク追加')) {
+      const code = extractKbnCode(rawText);
+      if (!code) {
+        await client.replyMessage(event.replyToken, { type: 'text', text: '追加するKBNコードが見つかりません。例：「ブックマーク追加 KBN-302-F01」' });
         return;
       }
-      // === KBN優先ルート ここまで ===
+      addBookmark(event.source.userId, code.toUpperCase());
+      await client.replyMessage(event.replyToken, { type: 'text', text: `ブックマークに追加しました：${code.toUpperCase()}` });
+      return;
+    }
 
-      // ▼ スタート
-      if (msg === 'スタート') {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `【空白社よりご案内】
+    // 削除
+    if (msg.startsWith('ブックマーク削除')) {
+      const code = extractKbnCode(rawText);
+      if (!code) {
+        await client.replyMessage(event.replyToken, { type: 'text', text: '削除するKBNコードが見つかりません。例：「ブックマーク削除 KBN-302-F01」' });
+        return;
+      }
+      removeBookmark(event.source.userId, code.toUpperCase());
+      await client.replyMessage(event.replyToken, { type: 'text', text: `ブックマークから削除しました：${code.toUpperCase()}` });
+      return;
+    }
+
+    // 全削除
+    if (msg === 'ブックマーク全削除' || msg === 'bookmarks clear') {
+      clearBookmarks(event.source.userId);
+      await client.replyMessage(event.replyToken, { type: 'text', text: 'ブックマークを全て削除しました。' });
+      return;
+    }
+
+    // === 通常分岐 ===
+    // ▼ スタート
+    if (msg === 'スタート') {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `【空白社よりご案内】
 
 ${name} 様
 
@@ -141,15 +228,15 @@ ${name} 様
 このトークに【同意します】と返信してください。
 
 ※本調査は空白社が独自に実施するものであり、対象物件の管理者・関係機関との直接的関係はありません。`,
-        });
-        return;
-      }
+      });
+      return;
+    }
 
-      // ▼ 同意
-      if (msg.includes('同意')) {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `${name} 様
+    // ▼ 同意
+    if (msg.includes('同意')) {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `${name} 様
 
 ご返信ありがとうございます。
 本調査へのご協力を確認いたしました。
@@ -166,15 +253,15 @@ ${name} 様
 
 対象行について、調査を進行中です。  
 必要に応じて詳細な閲覧権限を解放します。`,
-        });
-        return;
-      }
+      });
+      return;
+    }
 
-      // ▼ プロフィール検索：石田祐樹
-      if (msg.includes('石田') || msg.includes('祐樹')) {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `■ 石田 祐樹（いしだ・ゆうき）  
+    // ▼ プロフィール検索：石田祐樹
+    if (msg.includes('石田') || msg.includes('祐樹')) {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `■ 石田 祐樹（いしだ・ゆうき）  
 302号室｜1984年生｜会社員（営業職）  
 
 入居日：2021年3月15日  
@@ -183,15 +270,15 @@ ${name} 様
 ・定期提出の生活記録に空白箇所あり（本人未申告）  
 
 ※最終更新：2024年2月6日（住民協定書更新）`,
-        });
-        return;
-      }
+      });
+      return;
+    }
 
-      // ▼ プロフィール検索：坂本結衣
-      if (msg.includes('坂本') || msg.includes('結衣')) {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `■ 坂本 結衣（さかもと・ゆい）  
+    // ▼ プロフィール検索：坂本結衣
+    if (msg.includes('坂本') || msg.includes('結衣')) {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `■ 坂本 結衣（さかもと・ゆい）  
 303号室｜1992年生｜学生（休学中）  
 
 入居日：2023年4月10日  
@@ -200,15 +287,15 @@ ${name} 様
 ・集合ポストに「宛先のない封筒」が週に1回投函されていると記録  
 
 ※最終更新：2024年5月22日（提出書類訂正）`,
-        });
-        return;
-      }
+      });
+      return;
+    }
 
-      // ▼ プロフィール検索：武田晴美
-      if (msg.includes('武田') || msg.includes('晴美')) {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `■ 武田 晴美（たけだ・はるみ）  
+    // ▼ プロフィール検索：武田晴美
+    if (msg.includes('武田') || msg.includes('晴美')) {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `■ 武田 晴美（たけだ・はるみ）  
 305号室｜1975年生｜無職（元清掃員）  
 
 入居日：2019年12月1日  
@@ -219,15 +306,15 @@ ${name} 様
 　※これに関しては【KBN-305-F01】に整理済み
 
 ※最終更新：2023年10月5日（担当者手動補記）`,
-        });
-        return;
-      }
+      });
+      return;
+    }
 
-      // ▼ 拾得物記録：KBN-305-F01（既存の個別分岐は残す）
-      if (msg.includes('kbn-305-f01')) {
-        await client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `【拾得物記録：KBN-305-F01】
+    // ▼ 拾得物記録：KBN-305-F01（個別分岐）
+    if (msg.includes('kbn-305-f01')) {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: `【拾得物記録：KBN-305-F01】
 
 対象住人：武田 晴美（305号室）  
 記録日：2023年12月3日  
@@ -252,16 +339,15 @@ ${name} 様
 備考：  
 当該内容は他の証言と併せて調査継続中。  
 現時点では証拠資料としての効力は保留。`,
-        });
-        return;
-      }
-
-      // ▼ 該当しないメッセージ
-      await client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: `記録が見つかりません。対象住人の氏名や記録番号をご確認ください。`,
       });
+      return;
     }
+
+    // ▼ デフォルト
+    await client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `記録が見つかりません。対象住人の氏名や記録番号をご確認ください。`,
+    });
   }));
 
   res.status(200).end();
