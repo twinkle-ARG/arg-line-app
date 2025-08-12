@@ -33,7 +33,7 @@ export default async function handler(req, res) {
 急に失礼します。私は空白社の調査部の者です。
 あなたにしかお願いできないことがあって連絡しました。
 
-今朝、"明日の記録"がこちらに届きました。
+今朝、あなたの"明日の記録"がこちらに届きました。
 まだ起きていないはずの出来事が、なぜか克明に書かれています。
 
 まずは内容を確認してほしいのですが…受け取ってくれますか？`;
@@ -103,3 +103,4 @@ export default async function handler(req, res) {
 
   res.status(200).end();
 }
+
