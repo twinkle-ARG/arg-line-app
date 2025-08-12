@@ -36,8 +36,7 @@ export default async function handler(req, res) {
 今朝、弊社にあなたの"明日の記録"が届きました。
 まだ起きていないはずの出来事が、なぜか克明に記されています。
 
-しかし、その記録は断片的なデータにすぎず、
-こちらでも全容を把握できていません。
+しかし、その記録は断片的なデータにすぎず、こちらでも全容を把握できていません。
 
 ……まずは内容を確認していただけますか？`;
 
@@ -106,6 +105,7 @@ export default async function handler(req, res) {
 
   res.status(200).end();
 }
+
 
 
 
