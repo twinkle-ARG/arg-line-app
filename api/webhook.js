@@ -2,12 +2,11 @@
 import { Client } from '@line/bot-sdk';
 
 export default async function handler(req, res) {
-  // --- LINE SDK クライアント ---
   const client = new Client({
     channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   });
 
-  // --- ユーザー名取得 ---
+  // 表示名取得
   async function getDisplayName(userId, fallback = '協力者様') {
     try {
       const profile = await client.getProfile(userId);
@@ -18,15 +17,20 @@ export default async function handler(req, res) {
     }
   }
 
-  // --- 初回挨拶：5秒ごとに段階送信（pushMessageのみ使用） ---
+  // 文字正規化（空白除去＋低リスク整形）
+  function norm(text = '') {
+    const trimmed = text.trim().replace(/\s+/g, '');           // 全空白除去
+    const hyphenFixed = trimmed.replace(/[\u2010-\u2015\u2212\u30FC\uFF0D]/g, '-');
+    return hyphenFixed.toLowerCase();
+  }
+
+  // 初回挨拶（5秒おきに送信）
   function sendIntroWithDelays(userId, name) {
-    // 1通目（即時）
     client.pushMessage(userId, {
       type: 'text',
       text: `…${name}さん、ですよね？\n（間違っていたらすみません）`
     });
 
-    // 2通目（+5秒）
     setTimeout(() => {
       client.pushMessage(userId, {
         type: 'text',
@@ -34,7 +38,6 @@ export default async function handler(req, res) {
       });
     }, 5000);
 
-    // 3通目（+10秒）
     setTimeout(() => {
       client.pushMessage(userId, {
         type: 'text',
@@ -42,7 +45,6 @@ export default async function handler(req, res) {
       });
     }, 10000);
 
-    // 4通目（+15秒）※クイックリプライ付き
     setTimeout(() => {
       client.pushMessage(userId, {
         type: 'text',
@@ -57,64 +59,44 @@ export default async function handler(req, res) {
     }, 15000);
   }
 
-  // --- 「受け取る」後の暫定返答（5秒間隔で軽く演出：必要なら後で本文に差し替え） ---
+  // 受け取る後（暫定）
   function sendAfterAcceptWithDelays(userId, name) {
-    client.pushMessage(userId, {
-      type: 'text',
-      text: `${name}さん、ありがとうございます。`
-    });
-
-    setTimeout(() => {
-      client.pushMessage(userId, {
-        type: 'text',
-        text: 'では、“明日の記録”の準備をします。'
-      });
-    }, 5000);
-
-    setTimeout(() => {
-      client.pushMessage(userId, {
-        type: 'text',
-        text: '準備が整い次第、お送りします。'
-      });
-    }, 10000);
+    client.pushMessage(userId, { type: 'text', text: `${name}さん、ありがとうございます。` });
+    setTimeout(() => client.pushMessage(userId, { type: 'text', text: 'では、“明日の記録”の準備をします。' }), 5000);
+    setTimeout(() => client.pushMessage(userId, { type: 'text', text: '準備が整い次第、お送りします。' }), 10000);
   }
 
-  // --- 本体: Webhook 受信 ---
-  const events = req.body?.events;
-  if (!Array.isArray(events)) {
-    return res.status(500).end();
+  const events = Array.isArray(req.body?.events) ? req.body.events : [];
+  if (!events.length) {
+    res.status(200).end();
+    return;
   }
 
-  // すぐ 200 を返す（遅延送信はバックグラウンドで実行）
-  res.status(200).end();
-
-  await Promise.all(events.map(async (event) => {
-    // 友だち追加時：初回挨拶を5秒間隔で送信
+  // イベント処理をキックしてから即時200を返す
+  const tasks = events.map(async (event) => {
+    // 友だち追加
     if (event.type === 'follow') {
       const name = await getDisplayName(event.source.userId);
       sendIntroWithDelays(event.source.userId, name);
       return;
     }
 
-    // テキストメッセージ時
+    // テキスト
     if (event.type === 'message' && event.message?.type === 'text') {
-      const raw = event.message.text || '';
-      const msg = raw.trim().toLowerCase();
       const name = await getDisplayName(event.source.userId);
+      const msg = norm(event.message.text);
 
-      // 手動トリガ：初回挨拶（はじめる／スタート）
-      if (msg === 'はじめる' || msg === 'スタート' || msg === 'start') {
+      // 手動トリガ（ゆるく一致）
+      if (msg.includes('スタート') || msg.includes('はじめる') || msg === 'start') {
         sendIntroWithDelays(event.source.userId, name);
         return;
       }
 
-      // 受け取る → 次の導線（本文は後で差し替え可能）
       if (msg.includes('受け取る')) {
         sendAfterAcceptWithDelays(event.source.userId, name);
         return;
       }
 
-      // 断る → 丁寧に終了
       if (msg.includes('断る')) {
         await client.pushMessage(event.source.userId, {
           type: 'text',
@@ -123,12 +105,14 @@ export default async function handler(req, res) {
         return;
       }
 
-      // デフォルト返信（ガイド）
+      // ガイド
       await client.pushMessage(event.source.userId, {
         type: 'text',
         text: 'メニュー：\n・「はじめる」…初回のご案内\n・「受け取る」…“明日の記録”の受け取り\n・「断る」…今回は中止する'
       });
     }
-  }));
-}
+  });
 
+  Promise.allSettled(tasks).finally(() => {});
+  res.status(200).end();
+}
