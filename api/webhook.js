@@ -69,7 +69,7 @@ export default async function handler(req, res) {
       const name = await getName();
 
       // 手動トリガ（ゆるく判定）
-      if (raw.includes('スタート') || raw.includes('はじめる') || lower === 'start') {
+      if (raw.includes('スタート') || raw.includes('思い出す') || lower === 'start') {
         await replyIntro();
         return;
       }
@@ -87,7 +87,7 @@ export default async function handler(req, res) {
       if (raw.includes('断る')) {
         await client.replyMessage(event.replyToken, {
           type: 'text',
-          text: '了解しました。必要になったら「スタート」または「はじめる」と送ってください。'
+          text: '了解しました。必要になったら「スタート」または「思い出す」と送ってください。'
         });
         return;
       }
@@ -103,6 +103,7 @@ export default async function handler(req, res) {
 
   res.status(200).end();
 }
+
 
 
 
