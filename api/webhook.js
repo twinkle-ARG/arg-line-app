@@ -31,7 +31,7 @@ export default async function handler(req, res) {
 `…${name}さん、ですよね？（間違っていたらすみません）
 
 急に失礼します。私は空白社の調査部の者です。
-あなたにしかお願いできないことがあって連絡しました。
+…${name}さんに関係があると思い連絡しました。
 
 今朝、あなたの"明日の記録"がこちらに届きました。
 まだ起きていないはずの出来事が、なぜか克明に書かれています。
@@ -103,4 +103,5 @@ export default async function handler(req, res) {
 
   res.status(200).end();
 }
+
 
