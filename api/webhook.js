@@ -86,17 +86,31 @@ export default async function handler(req, res) {
 ────────────
 （※わかった語を小文字・半角英字で入力）`;
 
+  // ★ 画像なしの“縦読み”版（bluebasket）
   const record2 =
 `────────────
 【明日の記録 #2：スーパー棚崩落】
 
 15:21　棚列G-3、商品が一斉に揺れる。
-15:22　レジ横の青いカゴが、誰も触れていないのに中央通路へ。
-15:23　崩落直前のフレームだけ、青が一直線に“3つ”並ぶ。
+15:22　店内アナウンス、数秒の遅延。
+15:23　検品ログに“異常タイムスタンプ”が混じる。
 
-補足：鍵は「配置」。写真を見直せ。
+検品ログ（抜粋／自動OCR）
+Bread
+Lettuce
+Umbrella
+Energy drink
+---
+Battery
+Apple
+Soap
+Key
+Egg
+Tea
+
+補足：鍵は「並び」。入荷名の“先頭文字”を連結せよ。
 ────────────
-（ヒント：色＋物を英語で、くっつけて）`;
+（※導かれた語を小文字・半角英字で入力）`;
 
   const record3 =
 `────────────
@@ -170,7 +184,7 @@ export default async function handler(req, res) {
 
   // ── メインループ
   await Promise.all(events.map(async (event) => {
-    // followで導入返したい場合：ここでreplyIntro(event, name)してもOK
+    // follow時に導入を返すならここで replyIntro(event, name) を呼ぶのも可
     if (event.type !== 'message' || event.message?.type !== 'text') return;
 
     const userId = event.source.userId;
@@ -211,7 +225,8 @@ export default async function handler(req, res) {
       if (s.stage === 'A1') {
         await client.replyMessage(event.replyToken, { type: 'text', text: '「11-5-25-15-14-5」を A1Z26（A=1…Z=26）で変換。答えは小文字・半角英字。' });
       } else if (s.stage === 'B0') {
-        await client.replyMessage(event.replyToken, { type: 'text', text: '色＋物を英語で。青 + 買い物カゴ → ？（つなげて1語）' });
+        // ★ 先頭文字連結ヒントに変更
+        await client.replyMessage(event.replyToken, { type: 'text', text: '検品ログの各行の「先頭文字」を順に連結してみてください。（色＋物の英語1語になります）' });
       } else if (s.stage === 'C0') {
         await client.replyMessage(event.replyToken, { type: 'text', text: '…/../--./-./.-/.-.. をモールスでアルファベットに。' });
       } else if (s.stage === 'FINAL_READY') {
@@ -294,7 +309,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    // 色+物 → bluebasket
+    // 縦読み → bluebasket
     if (normalize(raw) === 'bluebasket') {
       await client.replyMessage(event.replyToken, [
         { type: 'text', text: '【停止コード2 取得】\n入力確認：bluebasket\n棚崩落の固定は解除済み。' },
